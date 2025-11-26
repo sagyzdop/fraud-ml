@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# ML model files (users should generate their own)
+model.pkl
+
 # Distribution / packaging
 .Python
 build/
