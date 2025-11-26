@@ -31,8 +31,7 @@ def test_prediction():
         'transdatetime': [datetime(2025, 3, 5, 16, 30)],
         'amount': [5000.0],
         'docno': [1234],
-        'direction': ['outgoing'],
-        'target': [0]
+        'direction': ['8406e407421ec28bd5f445793ef64fd1'],  # Encrypted text value
     })
     print(f"   Test data created: {test_data.shape}")
     
@@ -54,8 +53,7 @@ def test_prediction():
         'transdatetime': [datetime(2025, 11, 26, 3, 15)],  # Late night
         'amount': [150000.0],  # Large amount
         'docno': [9999],
-        'direction': ['outgoing'],
-        'target': [0]
+        'direction': ['b3a3d4a6006293195d998957d4f01e42'],  # Encrypted text value
     })
     
     result2 = predict_fraud(model_bundle, suspicious_data)

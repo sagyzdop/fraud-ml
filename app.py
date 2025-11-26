@@ -39,7 +39,6 @@ def preprocess_single_transaction(
     amount: float,
     docno: str,
     direction: str,
-    target: int,
 ) -> pd.DataFrame:
     """Convert single transaction input to DataFrame for model prediction."""
     data = {
@@ -49,7 +48,6 @@ def preprocess_single_transaction(
         "amount": [amount],
         "docno": [docno],
         "direction": [direction],
-        "target": [target],
     }
     return pd.DataFrame(data)
 
@@ -98,7 +96,10 @@ def preprocess_for_model(df: pd.DataFrame, model_bundle: dict) -> pd.DataFrame:
             processed = processed.drop(columns=["transdatetime"])
         
         if "direction" in processed.columns:
-            processed["direction"] = processed["direction"].map({"incoming": 0, "outgoing": 1}).fillna(-1).astype(int)
+            # Direction is encrypted text - convert to numeric via simple encoding
+            le = LabelEncoder()
+            processed["direction_encoded"] = le.fit_transform(processed["direction"].fillna('unknown').astype(str))
+            processed = processed.drop(columns=["direction"])
         
         if "docno" in processed.columns:
             processed = processed.drop(columns=["docno"])
@@ -136,16 +137,21 @@ def preprocess_for_model(df: pd.DataFrame, model_bundle: dict) -> pd.DataFrame:
         processed['is_night'] = ((processed['trans_hour'] >= 22) | (processed['trans_hour'] <= 6)).astype(int)
         processed['is_business_hours'] = ((processed['trans_hour'] >= 9) & (processed['trans_hour'] <= 17)).astype(int)
     
-    # Encode direction
+    # Encode direction (encrypted text field)
     if "direction" in processed.columns:
+        # Convert to string and handle as text
+        processed['direction'] = processed['direction'].fillna('unknown').astype(str)
+        
         if 'direction' in encoders:
             le_direction = encoders['direction']
-            # Handle unknown categories
+            # Handle unknown categories by assigning -1
             processed['direction_encoded'] = processed['direction'].apply(
                 lambda x: le_direction.transform([x])[0] if x in le_direction.classes_ else -1
             )
         else:
-            processed["direction_encoded"] = processed["direction"].map({"incoming": 0, "outgoing": 1}).fillna(-1).astype(int)
+            # If no encoder available, use simple label encoding
+            le_temp = LabelEncoder()
+            processed["direction_encoded"] = le_temp.fit_transform(processed['direction'])
     
     # Handle phone model and OS with frequency encoding
     if 'last_phone_model_categorical' in processed.columns:
@@ -359,20 +365,14 @@ def main():
                 help="Transaction document number"
             )
             
-            direction = st.selectbox(
-                "Direction",
-                options=["incoming", "outgoing"],
-                help="Direction of the transaction"
+            direction = st.text_input(
+                "Direction (encrypted identifier)",
+                value="",
+                help="Transaction direction identifier (leave empty if unknown)"
             )
             
-            target = st.number_input(
-                "Target",
-                min_value=0,
-                max_value=1,
-                value=0,
-                step=1,
-                help="Target variable (0 or 1)"
-            )
+            if not direction:
+                direction = "unknown"
         
         # Combine date and time for transdatetime
         full_transdatetime = datetime.combine(transdate, transdatetime)
@@ -390,7 +390,6 @@ def main():
                         amount=amount,
                         docno=docno,
                         direction=direction,
-                        target=target,
                     )
                     
                     # Run prediction with custom threshold
@@ -460,7 +459,9 @@ def main():
         st.markdown("""
         Upload a CSV file containing multiple transactions to analyze them all at once.
         
-        **Required columns:** `cst_dim_id`, `transdate`, `transdatetime`, `amount`, `docno`, `direction`, `target`
+        **Required columns:** `cst_dim_id`, `transdate`, `transdatetime`, `amount`, `docno`, `direction`
+        
+        **Note:** If your CSV includes a `target` column (actual fraud labels), it will be ignored during prediction.
         """)
         
         uploaded_file = st.file_uploader(
@@ -471,15 +472,28 @@ def main():
         
         if uploaded_file is not None:
             try:
-                # Read CSV
-                df = pd.read_csv(uploaded_file)
+                # Read CSV - try to detect separator
+                # First, try reading a sample to detect delimiter
+                sample = uploaded_file.read(1024).decode('utf-8')
+                uploaded_file.seek(0)  # Reset file pointer
+                
+                # Detect separator by counting occurrences
+                semicolon_count = sample.count(';')
+                comma_count = sample.count(',')
+                
+                # Use semicolon if it appears more frequently than comma
+                separator = ';' if semicolon_count > comma_count else ','
+                
+                # Read CSV with detected separator
+                df = pd.read_csv(uploaded_file, sep=separator)
                 
                 st.subheader("📊 Uploaded Data Preview")
+                st.caption(f"Detected separator: `{separator}`")
                 st.dataframe(df.head(10), use_container_width=True)
                 st.info(f"Total transactions: {len(df)}")
                 
-                # Validate columns
-                required_columns = ["cst_dim_id", "transdate", "transdatetime", "amount", "docno", "direction", "target"]
+                # Validate columns (target is optional as it's the label, not a feature)
+                required_columns = ["cst_dim_id", "transdate", "transdatetime", "amount", "docno", "direction"]
                 missing_columns = [col for col in required_columns if col not in df.columns]
                 
                 if missing_columns:

@@ -158,8 +158,10 @@ class ModelRetrainingPipeline:
         # Encode categoricals
         encoders = {}
         if 'direction' in data.columns:
+            # Convert to string type to handle encrypted text values
+            data['direction'] = data['direction'].fillna('unknown').astype(str)
             le_direction = LabelEncoder()
-            data['direction_encoded'] = le_direction.fit_transform(data['direction'].fillna('unknown'))
+            data['direction_encoded'] = le_direction.fit_transform(data['direction'])
             encoders['direction'] = le_direction
         
         # Frequency encoding

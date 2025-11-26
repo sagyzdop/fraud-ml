@@ -20,7 +20,7 @@ The model is trained on two merged datasets:
      - `transdatetime`: Transaction timestamp
      - `amount`: Transaction amount
      - `docno`: Document number
-     - `direction`: Transaction direction (encrypted destination)
+     - `direction`: Transaction direction (encrypted identifier - text field)
      - `target`: Label (0=legitimate, 1=fraudulent)
 
 2. **Behavioral Patterns Data** (`поведенческие_паттерны_клиентов_3.csv`)
@@ -57,7 +57,7 @@ The datasets are merged on `cst_dim_id` and `transdate`, resulting in:
 - `is_business_hours`: Business hours (9 AM - 5 PM)
 
 #### 4. Categorical Encodings (3)
-- `direction_encoded`: Encoded transaction direction
+- `direction_encoded`: Encoded transaction direction (from encrypted text field)
 - `phone_model_freq`: Frequency encoding of phone model
 - `os_freq`: Frequency encoding of OS
 

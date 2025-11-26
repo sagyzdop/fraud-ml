@@ -442,8 +442,7 @@ if __name__ == "__main__":
         'transdatetime': [datetime(2025, 3, 5, 3, 30)],  # Night transaction
         'amount': [150000.0],  # Large amount
         'docno': [1234],
-        'direction': ['outgoing'],
-        'target': [0]
+        'direction': ['8406e407421ec28bd5f445793ef64fd1'],  # Encrypted text value
     })
     
     # Preprocess

@@ -115,11 +115,14 @@ def preprocess_data(df: pd.DataFrame) -> tuple:
     # Handle categorical variables
     encoders = {}
     
-    # Encode direction
+    # Encode direction (encrypted text field)
     if 'direction' in data.columns:
+        # Convert to string type to handle encrypted text values
+        data['direction'] = data['direction'].fillna('unknown').astype(str)
         le_direction = LabelEncoder()
-        data['direction_encoded'] = le_direction.fit_transform(data['direction'].fillna('unknown'))
+        data['direction_encoded'] = le_direction.fit_transform(data['direction'])
         encoders['direction'] = le_direction
+        print(f"   Direction field: {data['direction'].nunique()} unique values encoded")
     
     # Encode phone model and OS (high cardinality - use frequency encoding)
     if 'last_phone_model_categorical' in data.columns:
