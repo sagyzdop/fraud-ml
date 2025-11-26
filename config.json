@@ -1,0 +1,58 @@
+{
+  "model_config": {
+    "model_path": "model.pkl",
+    "default_fraud_threshold": 0.5,
+    "fraud_threshold_range": [0.0, 1.0],
+    "fraud_threshold_step": 0.05
+  },
+  "metrics_config": {
+    "primary_metric": "roc_auc",
+    "beta_for_fbeta": 2.0,
+    "beta_values": [0.5, 1.0, 2.0],
+    "performance_thresholds": {
+      "min_roc_auc": 0.85,
+      "min_recall": 0.30,
+      "min_precision": 0.15,
+      "min_f1_score": 0.20
+    }
+  },
+  "explainability_config": {
+    "enable_shap": true,
+    "max_shap_features": 10,
+    "enable_feature_importance": true,
+    "max_importance_features": 10
+  },
+  "data_config": {
+    "transactions_path": "транзакции_в_Мобильном_интернет_Банкинге.csv",
+    "behavioral_path": "поведенческие_паттерны_клиентов_3.csv",
+    "test_size": 0.2,
+    "random_state": 42
+  },
+  "retraining_config": {
+    "auto_retrain_enabled": false,
+    "retrain_frequency_days": 7,
+    "backup_old_models": true,
+    "backup_directory": "model_backups",
+    "min_new_samples_for_retrain": 100,
+    "validation_required": true
+  },
+  "app_config": {
+    "app_title": "Bank Transaction Fraud Detection",
+    "enable_bulk_processing": true,
+    "enable_single_transaction": true,
+    "max_bulk_upload_size_mb": 100
+  },
+  "risk_levels": {
+    "low": {"min": 0.0, "max": 0.3, "color": "green", "action": "Allow"},
+    "moderate": {"min": 0.3, "max": 0.5, "color": "yellow", "action": "Monitor"},
+    "high": {"min": 0.5, "max": 0.7, "color": "orange", "action": "Review"},
+    "critical": {"min": 0.7, "max": 1.0, "color": "red", "action": "Block"}
+  },
+  "feature_engineering": {
+    "use_temporal_features": true,
+    "use_behavioral_features": true,
+    "use_frequency_encoding": true,
+    "use_log_transforms": true,
+    "scaling_method": "standard"
+  }
+}

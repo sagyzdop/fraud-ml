@@ -11,9 +11,12 @@ A production-ready fraud detection system trained on real mobile banking transac
 - **Real ML Model**: Trained on 13,140 actual transactions with 1.26% fraud rate
 - **High Performance**: 97.3% accuracy, 94.5% ROC-AUC score
 - **Rich Feature Set**: 33 features including behavioral patterns, temporal features, and transaction characteristics
-- **Single Transaction Analysis**: Real-time fraud detection for individual transactions
+- **F_β Metrics**: Calculates F_0.5, F_1.0, F_2.0 scores for flexible precision/recall tuning
+- **SHAP Explainability**: Complete interpretability layer with SHAP values and feature importance
+- **Configurable Threshold**: Adjustable fraud probability threshold via UI, config file, or API
+- **Automated Retraining**: MLOps pipeline for automatic model updates with validation
+- **Single Transaction Analysis**: Real-time fraud detection with explanations
 - **Bulk CSV Processing**: Batch analysis of multiple transactions
-- **Model Metrics Dashboard**: View detailed performance metrics
 - **Export Results**: Download analysis results as CSV files
 
 ### Model Performance
@@ -23,7 +26,9 @@ A production-ready fraud detection system trained on real mobile banking transac
 | Accuracy | 97.30% |
 | Precision | 20.31% |
 | Recall | 39.39% |
-| F1-Score | 26.80% |
+| F1-Score (F_β, β=1.0) | 26.80% |
+| F_0.5-Score (precision-focused) | 22.49% |
+| F_2.0-Score (recall-focused) | 33.16% |
 | ROC-AUC | 94.48% |
 
 See [MODEL_DOCUMENTATION.md](MODEL_DOCUMENTATION.md) for detailed model information.
@@ -55,6 +60,11 @@ cd fraud-ml
 pip install -r requirements.txt
 ```
 
+Optional (for full explainability features):
+```bash
+pip install shap
+```
+
 3. Train the model on real data:
 ```bash
 python create_sample_model.py
@@ -63,8 +73,10 @@ python create_sample_model.py
 This will:
 - Load and merge the transaction and behavioral datasets
 - Preprocess and engineer 33 features
-- Train a Random Forest classifier
-- Evaluate performance and save the model as `model.pkl`
+- Train a Random Forest classifier with class balancing
+- Calculate F_β metrics (F_0.5, F_1.0, F_2.0)
+- Evaluate performance with ROC-AUC, precision, recall
+- Save the model as `model.pkl` with all metadata
 
 ### Running the Application
 
@@ -76,6 +88,15 @@ The application will open in your default web browser at `http://localhost:8501`
 
 ### Usage
 
+#### Configurable Fraud Threshold
+
+Adjust the fraud detection sensitivity using the sidebar slider:
+- **Lower threshold (e.g., 0.3)**: More sensitive, catches more fraud but increases false positives
+- **Default threshold (0.5)**: Balanced precision/recall trade-off
+- **Higher threshold (e.g., 0.7)**: More conservative, fewer false positives but may miss some fraud
+
+The threshold can also be configured via `config.json` or API parameter.
+
 #### Single Transaction Analysis
 
 Enter transaction details in the web form:
@@ -85,7 +106,12 @@ Enter transaction details in the web form:
 - Direction (incoming/outgoing)
 - Additional metadata
 
-The system will predict whether the transaction is fraudulent and provide a risk assessment.
+The system will:
+- Predict fraud probability (0-100%)
+- Apply the configured threshold
+- Show risk level (Low, Moderate, High, Critical)
+- **Display SHAP explanations** (if enabled): Why was this transaction flagged?
+- Provide actionable recommendations
 
 #### Bulk CSV Processing
 
@@ -131,30 +157,45 @@ The model uses 33 engineered features:
 
 ### Testing
 
-Test the prediction pipeline:
-
+**Test the prediction pipeline:**
 ```bash
 python test_prediction.py
 ```
 
-This script:
-- Loads the trained model
-- Tests with sample transactions
-- Verifies the preprocessing pipeline
-- Shows prediction results
+**Test explainability features:**
+```bash
+python model_explainer.py
+```
+
+**Test all hackathon compliance features:**
+```bash
+python test_hackathon_features.py
+```
+
+**Test automated retraining pipeline:**
+```bash
+python retrain_pipeline.py --dry-run
+```
 
 ### Project Structure
 
 ```
 fraud-ml/
-├── app.py                              # Streamlit web application
-├── create_sample_model.py              # Model training script
-├── test_prediction.py                  # Testing script
+├── app.py                              # Streamlit web application with threshold control
+├── create_sample_model.py              # Model training script with F_β metrics
+├── model_explainer.py                  # SHAP explainability module (NEW)
+├── retrain_pipeline.py                 # Automated retraining pipeline (NEW)
+├── test_prediction.py                  # Prediction testing script
+├── test_hackathon_features.py          # Hackathon compliance tests (NEW)
 ├── model.pkl                          # Trained model (generated)
+├── config.json                        # Configuration file (NEW)
 ├── requirements.txt                   # Python dependencies
 ├── MODEL_DOCUMENTATION.md             # Detailed model docs
+├── HACKATHON_COMPLIANCE.md            # Hackathon criteria compliance (NEW)
+├── IMPLEMENTATION_SUMMARY.md          # Implementation overview (NEW)
 ├── README.md                          # This file
 ├── sample_transactions.csv            # Sample data
+├── model_backups/                     # Model backup directory (generated)
 ├── поведенческие_паттерны_клиентов_3.csv   # Behavioral data
 └── транзакции_в_Мобильном_интернет_Банкинге.csv  # Transaction data
 ```
@@ -166,9 +207,13 @@ pandas>=2.2.3
 scikit-learn>=1.5.2
 streamlit>=1.40.0
 numpy>=1.24.0
+shap>=0.45.0          # For explainability (optional)
+matplotlib>=3.8.0     # For visualizations (optional)
 ```
 
 ### Model Retraining
+
+#### Manual Retraining
 
 To retrain the model with new data:
 
@@ -178,6 +223,38 @@ To retrain the model with new data:
 python create_sample_model.py
 ```
 3. The new `model.pkl` will be saved and automatically used by the application
+
+#### Automated Retraining Pipeline
+
+Use the automated retraining pipeline for production deployments:
+
+```bash
+# Standard retraining with validation
+python retrain_pipeline.py
+
+# Dry run (test without deploying)
+python retrain_pipeline.py --dry-run
+
+# Force deployment (skip validation)
+python retrain_pipeline.py --force
+
+# Create default configuration
+python retrain_pipeline.py --create-config
+```
+
+**Features:**
+- Automatic data loading and preprocessing
+- Performance validation against thresholds
+- Automatic backup of old models
+- Training history logging
+- Safe deployment with rollback capability
+
+**Schedule automated retraining:**
+```bash
+# Weekly retraining via cron
+crontab -e
+# Add: 0 2 * * 0 cd /path/to/fraud-ml && python retrain_pipeline.py
+```
 
 ### Documentation
 
@@ -197,8 +274,10 @@ See [LICENSE](LICENSE) file for details.
 
 This project was created for the ForteBank AI Hackathon. For questions or contributions, please open an issue or submit a pull request.
 
----
+### Quick Links
 
-**Last Updated**: November 26, 2025  
-**Model Version**: 1.0  
-**Training Data Period**: January - August 2025
+- **Run Application**: `streamlit run app.py`
+- **Train Model**: `python create_sample_model.py`
+- **Test Model**: `python test_prediction.py`
+- **Explain Predictions**: `python model_explainer.py`
+- **Retrain Pipeline**: `python retrain_pipeline.py --dry-run`

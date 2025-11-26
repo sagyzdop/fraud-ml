@@ -17,6 +17,7 @@ from sklearn.metrics import (
     roc_auc_score, 
     precision_recall_curve,
     f1_score,
+    fbeta_score,
     accuracy_score,
     precision_score,
     recall_score
@@ -274,12 +275,30 @@ def train_model(X: pd.DataFrame, y: pd.Series, model_type: str = 'random_forest'
     y_pred = model.predict(X_test)
     y_pred_proba = model.predict_proba(X_test)[:, 1]
     
+    # Calculate F_β scores with different beta values
+    beta_values = [0.5, 1.0, 2.0]  # β=0.5 (precision-focused), β=1 (F1), β=2 (recall-focused)
+    f_beta_scores = {}
+    for beta in beta_values:
+        f_beta = fbeta_score(y_test, y_pred, beta=beta)
+        f_beta_scores[f"f{beta}_score"] = f_beta
+    
     print("\n=== Test Set Performance ===")
     print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
     print(f"Precision: {precision_score(y_test, y_pred):.4f}")
     print(f"Recall: {recall_score(y_test, y_pred):.4f}")
     print(f"F1-Score: {f1_score(y_test, y_pred):.4f}")
-    print(f"ROC-AUC Score: {roc_auc_score(y_test, y_pred_proba):.4f}")
+    
+    # Display F_β scores
+    print(f"\n=== F_β Scores (Different β values) ===")
+    print(f"F_0.5-Score (precision-focused): {f_beta_scores['f0.5_score']:.4f}")
+    print(f"F_1.0-Score (balanced):          {f_beta_scores['f1.0_score']:.4f}")
+    print(f"F_2.0-Score (recall-focused):    {f_beta_scores['f2.0_score']:.4f}")
+    print(f"\nβ interpretation:")
+    print(f"  β < 1: Emphasizes precision (fewer false positives)")
+    print(f"  β = 1: Balanced F1 score")
+    print(f"  β > 1: Emphasizes recall (catch more fraud cases)")
+    
+    print(f"\nROC-AUC Score: {roc_auc_score(y_test, y_pred_proba):.4f}")
     
     print("\n=== Confusion Matrix ===")
     print(confusion_matrix(y_test, y_pred))
@@ -310,7 +329,8 @@ def train_model(X: pd.DataFrame, y: pd.Series, model_type: str = 'random_forest'
         'f1_score': f1_score(y_test, y_pred),
         'roc_auc': roc_auc_score(y_test, y_pred_proba),
         'cv_f1_mean': cv_scores.mean(),
-        'cv_f1_std': cv_scores.std()
+        'cv_f1_std': cv_scores.std(),
+        **f_beta_scores  # Include all F_β scores
     }
     
     return model, metrics, (X_test, y_test, y_pred, y_pred_proba)

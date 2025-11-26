@@ -10,6 +10,13 @@ import pandas as pd
 import pickle
 from datetime import datetime, date
 from pathlib import Path
+import numpy as np
+from sklearn.metrics import fbeta_score
+try:
+    from model_explainer import ModelExplainer
+    EXPLAINER_AVAILABLE = True
+except ImportError:
+    EXPLAINER_AVAILABLE = False
 
 
 def load_model(model_path: str):
@@ -195,15 +202,17 @@ def preprocess_for_model(df: pd.DataFrame, model_bundle: dict) -> pd.DataFrame:
     return processed_features
 
 
-def predict_fraud(model_bundle, df: pd.DataFrame) -> pd.DataFrame:
-    """Run fraud detection on the DataFrame using the loaded model.
+def predict_fraud(model_bundle, df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame:
+    """
+    Run fraud detection on the DataFrame using the loaded model.
     
     Args:
         model_bundle: Dictionary containing model and preprocessing components
         df: Input DataFrame with transaction data
+        threshold: Fraud probability threshold (default 0.5)
     
     Returns:
-        DataFrame with predictions added
+        DataFrame with predictions and probabilities added
     """
     # Extract model from bundle
     if isinstance(model_bundle, dict) and 'model' in model_bundle:
@@ -215,11 +224,13 @@ def predict_fraud(model_bundle, df: pd.DataFrame) -> pd.DataFrame:
     # Preprocess the data for the model
     processed_df = preprocess_for_model(df, model_bundle)
     
-    # Make predictions
-    predictions = model.predict(processed_df)
+    # Make predictions with probabilities
+    fraud_probabilities = model.predict_proba(processed_df)[:, 1]
+    predictions = (fraud_probabilities >= threshold).astype(int)
     
     # Add predictions to original dataframe
     result_df = df.copy()
+    result_df["fraud_probability"] = fraud_probabilities
     result_df["fraud_prediction"] = predictions
     result_df["is_fraudulent"] = result_df["fraud_prediction"].apply(
         lambda x: "Yes" if x == 1 else "No"
@@ -243,6 +254,35 @@ def main():
     
     # Model loading section
     st.sidebar.header("⚙️ Model Configuration")
+    
+    # Fraud threshold configuration
+    fraud_threshold = st.sidebar.slider(
+        "Fraud Probability Threshold",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.5,
+        step=0.05,
+        help="Transactions with fraud probability above this threshold will be flagged as fraudulent"
+    )
+    
+    st.sidebar.markdown(f"**Current Threshold:** {fraud_threshold:.2f}")
+    st.sidebar.markdown("""
+    - **Lower threshold** (e.g., 0.3): More sensitive, catches more fraud but more false positives
+    - **Higher threshold** (e.g., 0.7): More conservative, fewer false positives but may miss some fraud
+    """)
+    
+    # Explainability toggle
+    enable_explanations = st.sidebar.checkbox(
+        "Enable Explainability",
+        value=EXPLAINER_AVAILABLE,
+        help="Show SHAP explanations for predictions (requires shap package)",
+        disabled=not EXPLAINER_AVAILABLE
+    )
+    
+    if not EXPLAINER_AVAILABLE:
+        st.sidebar.info("💡 Install SHAP for explainability: `pip install shap`")
+    
+    st.sidebar.markdown("---")
     
     # Check for default model
     default_model_path = Path("model.pkl")
@@ -353,13 +393,20 @@ def main():
                         target=target,
                     )
                     
-                    # Run prediction
-                    result = predict_fraud(model_bundle, transaction_df)
+                    # Run prediction with custom threshold
+                    result = predict_fraud(model_bundle, transaction_df, threshold=fraud_threshold)
                     
                     # Display result
                     st.subheader("Analysis Result")
                     
                     is_fraud = result["fraud_prediction"].iloc[0] == 1
+                    fraud_prob = result["fraud_probability"].iloc[0]
+                    
+                    # Show probability gauge
+                    col_a, col_b, col_c = st.columns(3)
+                    col_a.metric("Fraud Probability", f"{fraud_prob:.2%}")
+                    col_b.metric("Threshold", f"{fraud_threshold:.2%}")
+                    col_c.metric("Decision", "FRAUD" if is_fraud else "LEGITIMATE")
                     
                     if is_fraud:
                         st.error("⚠️ **POTENTIAL FRAUD DETECTED!**")
@@ -368,13 +415,41 @@ def main():
                         Please review the transaction details carefully.
                         """)
                     else:
-                        st.success("✅ **Transaction appears legitimate**")
+                        if fraud_prob > 0.3:
+                            st.warning("⚡ **Transaction appears legitimate but monitor closely**")
+                        else:
+                            st.success("✅ **Transaction appears legitimate**")
                         st.markdown("""
                         No fraud indicators were detected for this transaction.
                         """)
                     
                     # Show transaction details
                     st.dataframe(result, use_container_width=True)
+                    
+                    # Show explainability if enabled
+                    if enable_explanations and EXPLAINER_AVAILABLE:
+                        try:
+                            st.subheader("🔍 Prediction Explanation")
+                            
+                            # Create explainer
+                            explainer = ModelExplainer(model_bundle)
+                            explainer.initialize_shap()
+                            
+                            # Get preprocessed data
+                            processed = preprocess_for_model(transaction_df, model_bundle)
+                            
+                            # Generate explanation
+                            explanation = explainer.explain_prediction(
+                                processed,
+                                result["fraud_prediction"].iloc[0],
+                                fraud_prob
+                            )
+                            
+                            # Display explanation text
+                            st.text(explainer.generate_explanation_text(explanation))
+                            
+                        except Exception as e:
+                            st.warning(f"Could not generate explanation: {e}")
                     
                 except Exception as e:
                     st.error(f"❌ Error analyzing transaction: {e}")
@@ -417,8 +492,8 @@ def main():
                     else:
                         try:
                             with st.spinner("Analyzing transactions..."):
-                                # Run predictions
-                                results = predict_fraud(model_bundle, df)
+                                # Run predictions with custom threshold
+                                results = predict_fraud(model_bundle, df, threshold=fraud_threshold)
                             
                             # Summary statistics
                             st.subheader("📈 Analysis Summary")
@@ -426,11 +501,13 @@ def main():
                             total = len(results)
                             fraudulent = results["fraud_prediction"].sum()
                             legitimate = total - fraudulent
+                            avg_fraud_prob = results["fraud_probability"].mean()
                             
-                            col1, col2, col3 = st.columns(3)
+                            col1, col2, col3, col4 = st.columns(4)
                             col1.metric("Total Transactions", total)
                             col2.metric("Potentially Fraudulent", int(fraudulent), delta=None)
                             col3.metric("Legitimate", int(legitimate))
+                            col4.metric("Avg Fraud Probability", f"{avg_fraud_prob:.2%}")
                             
                             # Show fraudulent transactions
                             st.subheader("⚠️ Potentially Fraudulent Transactions")
