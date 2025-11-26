@@ -15,8 +15,14 @@ from pathlib import Path
 def load_model(model_path: str):
     """Load a pickle model from the specified path."""
     with open(model_path, "rb") as f:
-        model = pickle.load(f)
-    return model
+        model_bundle = pickle.load(f)
+    
+    # Check if it's the new model bundle or old simple model
+    if isinstance(model_bundle, dict) and 'model' in model_bundle:
+        return model_bundle
+    else:
+        # Old model format - wrap it for compatibility
+        return {'model': model_bundle, 'feature_names': None, 'encoders': None, 'scaler': None}
 
 
 def preprocess_single_transaction(
@@ -41,55 +47,173 @@ def preprocess_single_transaction(
     return pd.DataFrame(data)
 
 
-def preprocess_for_model(df: pd.DataFrame) -> pd.DataFrame:
+def preprocess_for_model(df: pd.DataFrame, model_bundle: dict) -> pd.DataFrame:
     """Preprocess DataFrame for model prediction.
     
     This function prepares the data for the model by:
     - Converting date/datetime columns to numeric features
     - Encoding categorical variables
+    - Creating additional features
     - Selecting only the features the model expects
+    
+    Args:
+        df: Input DataFrame with transaction data
+        model_bundle: Dictionary containing model and preprocessing components
+    
+    Returns:
+        Processed DataFrame ready for prediction
     """
+    import numpy as np
+    from sklearn.preprocessing import LabelEncoder
+    
     processed = df.copy()
     
-    # Convert transdate to numeric features if present
+    # Get model components
+    feature_names = model_bundle.get('feature_names')
+    encoders = model_bundle.get('encoders', {})
+    scaler = model_bundle.get('scaler')
+    
+    # If no feature names provided, use old preprocessing
+    if feature_names is None:
+        # Old preprocessing logic for backwards compatibility
+        if "transdate" in processed.columns:
+            processed["transdate"] = pd.to_datetime(processed["transdate"], errors="coerce")
+            processed["trans_day"] = processed["transdate"].dt.day
+            processed["trans_month"] = processed["transdate"].dt.month
+            processed["trans_year"] = processed["transdate"].dt.year
+            processed["trans_dayofweek"] = processed["transdate"].dt.dayofweek
+            processed = processed.drop(columns=["transdate"])
+        
+        if "transdatetime" in processed.columns:
+            processed["transdatetime"] = pd.to_datetime(processed["transdatetime"], errors="coerce")
+            processed["trans_hour"] = processed["transdatetime"].dt.hour
+            processed["trans_minute"] = processed["transdatetime"].dt.minute
+            processed = processed.drop(columns=["transdatetime"])
+        
+        if "direction" in processed.columns:
+            processed["direction"] = processed["direction"].map({"incoming": 0, "outgoing": 1}).fillna(-1).astype(int)
+        
+        if "docno" in processed.columns:
+            processed = processed.drop(columns=["docno"])
+        
+        for col in processed.columns:
+            if processed[col].dtype == "object":
+                try:
+                    processed[col] = pd.to_numeric(processed[col], errors="coerce")
+                except Exception:
+                    processed = processed.drop(columns=[col])
+        
+        return processed
+    
+    # New preprocessing logic matching training
+    
+    # Convert transdate to datetime features
     if "transdate" in processed.columns:
         processed["transdate"] = pd.to_datetime(processed["transdate"], errors="coerce")
         processed["trans_day"] = processed["transdate"].dt.day
         processed["trans_month"] = processed["transdate"].dt.month
         processed["trans_year"] = processed["transdate"].dt.year
         processed["trans_dayofweek"] = processed["transdate"].dt.dayofweek
-        processed = processed.drop(columns=["transdate"])
+        processed["trans_quarter"] = processed["transdate"].dt.quarter
     
-    # Convert transdatetime to numeric features if present
+    # Convert transdatetime to datetime features
     if "transdatetime" in processed.columns:
         processed["transdatetime"] = pd.to_datetime(processed["transdatetime"], errors="coerce")
         processed["trans_hour"] = processed["transdatetime"].dt.hour
         processed["trans_minute"] = processed["transdatetime"].dt.minute
-        processed = processed.drop(columns=["transdatetime"])
     
-    # Encode direction (assuming it's categorical)
+    # Create time-based features
+    if "trans_dayofweek" in processed.columns:
+        processed['is_weekend'] = processed['trans_dayofweek'].isin([5, 6]).astype(int)
+    if "trans_hour" in processed.columns:
+        processed['is_night'] = ((processed['trans_hour'] >= 22) | (processed['trans_hour'] <= 6)).astype(int)
+        processed['is_business_hours'] = ((processed['trans_hour'] >= 9) & (processed['trans_hour'] <= 17)).astype(int)
+    
+    # Encode direction
     if "direction" in processed.columns:
-        processed["direction"] = processed["direction"].map({"incoming": 0, "outgoing": 1}).fillna(-1).astype(int)
+        if 'direction' in encoders:
+            le_direction = encoders['direction']
+            # Handle unknown categories
+            processed['direction_encoded'] = processed['direction'].apply(
+                lambda x: le_direction.transform([x])[0] if x in le_direction.classes_ else -1
+            )
+        else:
+            processed["direction_encoded"] = processed["direction"].map({"incoming": 0, "outgoing": 1}).fillna(-1).astype(int)
     
-    # Convert docno to numeric (hash or drop)
-    if "docno" in processed.columns:
-        processed = processed.drop(columns=["docno"])
+    # Handle phone model and OS with frequency encoding
+    if 'last_phone_model_categorical' in processed.columns:
+        # For prediction, we won't have the exact frequency mapping, so use a default
+        processed['phone_model_freq'] = 0.0
     
-    # Ensure numeric types
-    for col in processed.columns:
-        if processed[col].dtype == "object":
-            try:
-                processed[col] = pd.to_numeric(processed[col], errors="coerce")
-            except Exception:
-                processed = processed.drop(columns=[col])
+    if 'last_os_categorical' in processed.columns:
+        processed['os_freq'] = 0.0
     
-    return processed
+    # Create amount log feature
+    if 'amount' in processed.columns:
+        processed['amount_log'] = np.log1p(processed['amount'])
+    
+    # Handle behavioral features - fill missing with 0
+    behavioral_features = [
+        'monthly_os_changes', 'monthly_phone_model_changes',
+        'logins_last_7_days', 'logins_last_30_days',
+        'login_frequency_7d', 'login_frequency_30d',
+        'freq_change_7d_vs_mean', 'logins_7d_over_30d_ratio',
+        'avg_login_interval_30d', 'std_login_interval_30d',
+        'var_login_interval_30d', 'ewm_login_interval_7d',
+        'burstiness_login_interval', 'fano_factor_login_interval',
+        'zscore_avg_login_interval_7d'
+    ]
+    
+    # Create behavioral flags
+    if 'monthly_os_changes' in processed.columns and processed['monthly_os_changes'].notna().any():
+        processed['has_behavioral_data'] = processed['monthly_os_changes'].notna().astype(int)
+        processed['os_changes_high'] = (processed['monthly_os_changes'] > 1).astype(int)
+        processed['phone_changes_high'] = (processed['monthly_phone_model_changes'] > 1).astype(int)
+    else:
+        processed['has_behavioral_data'] = 0
+        processed['os_changes_high'] = 0
+        processed['phone_changes_high'] = 0
+    
+    # Ensure all expected features exist
+    for feature in feature_names:
+        if feature not in processed.columns:
+            processed[feature] = 0
+    
+    # Fill any remaining NaN values
+    for feature in feature_names:
+        if feature in processed.columns:
+            processed[feature] = processed[feature].fillna(0)
+    
+    # Select only the features used in training
+    processed_features = processed[feature_names].copy()
+    
+    # Scale features if scaler is available
+    if scaler is not None:
+        processed_features = scaler.transform(processed_features)
+        processed_features = pd.DataFrame(processed_features, columns=feature_names, index=processed.index)
+    
+    return processed_features
 
 
-def predict_fraud(model, df: pd.DataFrame) -> pd.DataFrame:
-    """Run fraud detection on the DataFrame using the loaded model."""
+def predict_fraud(model_bundle, df: pd.DataFrame) -> pd.DataFrame:
+    """Run fraud detection on the DataFrame using the loaded model.
+    
+    Args:
+        model_bundle: Dictionary containing model and preprocessing components
+        df: Input DataFrame with transaction data
+    
+    Returns:
+        DataFrame with predictions added
+    """
+    # Extract model from bundle
+    if isinstance(model_bundle, dict) and 'model' in model_bundle:
+        model = model_bundle['model']
+    else:
+        model = model_bundle
+        model_bundle = {'model': model, 'feature_names': None, 'encoders': None, 'scaler': None}
+    
     # Preprocess the data for the model
-    processed_df = preprocess_for_model(df)
+    processed_df = preprocess_for_model(df, model_bundle)
     
     # Make predictions
     predictions = model.predict(processed_df)
@@ -122,7 +246,7 @@ def main():
     
     # Check for default model
     default_model_path = Path("model.pkl")
-    model = None
+    model_bundle = None
     
     uploaded_model = st.sidebar.file_uploader(
         "Upload ML Model (.pkl)", 
@@ -132,13 +256,16 @@ def main():
     
     if uploaded_model is not None:
         try:
-            model = pickle.load(uploaded_model)
+            model_bundle = pickle.load(uploaded_model)
+            # Wrap old model format for compatibility
+            if not isinstance(model_bundle, dict):
+                model_bundle = {'model': model_bundle, 'feature_names': None, 'encoders': None, 'scaler': None}
             st.sidebar.success("✅ Model loaded successfully!")
         except Exception as e:
             st.sidebar.error(f"❌ Error loading model: {e}")
     elif default_model_path.exists():
         try:
-            model = load_model(str(default_model_path))
+            model_bundle = load_model(str(default_model_path))
             st.sidebar.info("ℹ️ Using default model (model.pkl)")
         except Exception as e:
             st.sidebar.warning(f"⚠️ Could not load default model: {e}")
@@ -211,7 +338,7 @@ def main():
         full_transdatetime = datetime.combine(transdate, transdatetime)
         
         if st.button("🔍 Analyze Transaction", type="primary"):
-            if model is None:
+            if model_bundle is None:
                 st.error("❌ Please upload a model file first!")
             else:
                 try:
@@ -227,7 +354,7 @@ def main():
                     )
                     
                     # Run prediction
-                    result = predict_fraud(model, transaction_df)
+                    result = predict_fraud(model_bundle, transaction_df)
                     
                     # Display result
                     st.subheader("Analysis Result")
@@ -285,13 +412,13 @@ def main():
                     st.markdown("The model will try to work with available columns.")
                 
                 if st.button("🔍 Analyze All Transactions", type="primary"):
-                    if model is None:
+                    if model_bundle is None:
                         st.error("❌ Please upload a model file first!")
                     else:
                         try:
                             with st.spinner("Analyzing transactions..."):
                                 # Run predictions
-                                results = predict_fraud(model, df)
+                                results = predict_fraud(model_bundle, df)
                             
                             # Summary statistics
                             st.subheader("📈 Analysis Summary")
